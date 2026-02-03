@@ -34,6 +34,14 @@ data "archive_file" "lambda_package" {
   output_path = local.filename
 }
 
+# Fetch S3 object metadata to detect changes via etag
+data "aws_s3_object" "lambda_package" {
+  count = local.create && var.create_function && var.s3_existing_package != null ? 1 : 0
+
+  bucket = var.s3_existing_package.bucket
+  key    = var.s3_existing_package.key
+}
+
 # Build layer package from source
 data "archive_file" "layer_package" {
   count = local.create && var.create_layer && local.build_layer_from_source ? 1 : 0
@@ -41,6 +49,14 @@ data "archive_file" "layer_package" {
   type        = "zip"
   source_dir  = var.layer_source_path
   output_path = local.layer_filename
+}
+
+# Fetch S3 object metadata for layer to detect changes via etag
+data "aws_s3_object" "layer_package" {
+  count = local.create && var.create_layer && var.layer_s3_existing_package != null ? 1 : 0
+
+  bucket = var.layer_s3_existing_package.bucket
+  key    = var.layer_s3_existing_package.key
 }
 
 resource "aws_iam_role" "lambda" {
@@ -72,7 +88,9 @@ resource "aws_lambda_function" "this" {
 
   # Package configuration
   filename         = var.local_existing_package != null || local.build_from_source ? local.filename : null
-  source_code_hash = var.local_existing_package != null || local.build_from_source ? filebase64sha256(local.filename) : null
+  source_code_hash = var.s3_existing_package != null ? data.aws_s3_object.lambda_package[0].etag : (
+    var.local_existing_package != null || local.build_from_source ? filebase64sha256(local.filename) : null
+  )
 
   s3_bucket         = var.s3_existing_package != null ? try(var.s3_existing_package.bucket, null) : null
   s3_key            = var.s3_existing_package != null ? try(var.s3_existing_package.key, null) : null
@@ -206,7 +224,9 @@ resource "aws_lambda_layer_version" "this" {
   compatible_runtimes = var.compatible_runtimes
 
   filename         = var.layer_local_existing_package != null || local.build_layer_from_source ? local.layer_filename : null
-  source_code_hash = var.layer_local_existing_package != null || local.build_layer_from_source ? filebase64sha256(local.layer_filename) : null
+  source_code_hash = var.layer_s3_existing_package != null ? data.aws_s3_object.layer_package[0].etag : (
+    var.layer_local_existing_package != null || local.build_layer_from_source ? filebase64sha256(local.layer_filename) : null
+  )
 
   s3_bucket         = var.layer_s3_existing_package != null ? local.layer_s3_bucket : null
   s3_key            = var.layer_s3_existing_package != null ? local.layer_s3_key : null
